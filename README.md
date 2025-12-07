@@ -121,11 +121,11 @@ anchor deploy --provider.cluster localnet
 # Switch to devnet
 solana config set --url devnet
 
-# Get devnet SOL
+# Get devnet SOL (run a couple of times if needed)
 solana airdrop 2 $(solana address)
 
-# Deploy
-anchor deploy --provider.cluster devnet
+# Deploy (explicitly specify devnet wallet if different from default)
+anchor deploy --provider.cluster devnet --provider.wallet ~/.config/solana/devnet.json
 ```
 
 ### Deploy to Mainnet
@@ -172,7 +172,43 @@ The `Anchor.toml` file contains:
 
 The program ID is defined in:
 - `programs/onlypump-presale/src/lib.rs`: `declare_id!("...")`
-- `Anchor.toml`: `[programs.localnet]` section
+- `Anchor.toml`: `[programs.localnet]` / `[programs.devnet]` sections
+
+## Presale & LP Flow Overview
+
+- **Token source**: The presale works with any SPL token mint. In production this will be a Pump.fun-created mint obtained via your backend (NestJS) APIs.
+- **Vaults created in `create_presale`**:
+  - `token_vault` (PDA SPL token account holding all presale/LP/ecosystem tokens).
+  - `public_sol_vault` (PDA SOL account holding user contributions).
+  - `ecosystem_vault` (PDA SPL token account for ecosystem allocation).
+- **Funding**:
+  - Off-chain, your backend acquires/mints the required token supply into a regular token account.
+  - On-chain, `fund_presale_tokens` transfers those tokens into the `token_vault` PDA.
+- **User contributions**:
+  - `contribute_public` moves SOL from the user into `public_sol_vault`, tracks per-user `UserPosition`, and accumulates `public_raised_lamports`.
+- **Finalization & migration**:
+  - `finalize_presale` marks the presale as finalized.
+  - `migrate_and_create_lp` (current behavior):
+    - Transfers `lp_token_allocation` from `token_vault` → `lp_token_account`.
+    - Transfers `ecosystem_allocation` from `token_vault` → `ecosystem_vault`.
+    - Transfers `lp_sol_amount` SOL from `public_sol_vault` → `lp_sol_account`.
+    - Sends any remaining SOL in `public_sol_vault` to `treasury`.
+    - Marks `presale.is_migrated = true` and emits `MigrateAndCreateLpEvent`.
+  - **Note:** This instruction currently **prepares balances** for LP creation but does **not yet CPI into Pump.fun/PumpSwap/Raydium**. An off-chain bot or a future CPI-based instruction should take `lp_token_account` + `lp_sol_account` and actually create the AMM LP.
+
+## Pump.fun / PumpSwap Integration Notes
+
+- **Pump.fun tokens**:
+  - Your NestJS backend calls Pump.fun to create a token and returns the SPL mint address.
+  - That mint is passed into `create_presale` as the `mint` argument.
+  - The backend is responsible for ensuring enough supply is held by the funding authority wallet before `fund_presale_tokens` is called.
+- **Future PumpSwap (or other AMM) CPI**:
+  - Once you have the PumpSwap IDL and program ID (devnet/mainnet), you can extend `MigrateAndCreateLp` to:
+    - Accept a `Program<'info, PumpSwap>` account and whatever pool/market accounts PumpSwap requires.
+    - Build an Anchor CPI to PumpSwap’s “create pool / add initial liquidity” instruction, using:
+      - `lp_token_account` and `lp_sol_account` as the token/SOL sources.
+      - A suitable PDA (e.g. `lp_authority`) as the LP authority.
+  - Until then, the current design keeps on-chain responsibilities minimal while still matching real-world balance movements closely enough for testing and integration.
 
 ## Common Commands
 

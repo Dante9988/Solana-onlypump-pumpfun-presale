@@ -8,7 +8,8 @@ pub mod utils;
 
 use state::accounts::*;
 
-declare_id!("BnFLfMvisKoXikZxvBUDvqfMT7iqVYEq4b65H6ThSfGN");
+// NOTE: This must match the program ID used when deploying (see Anchor.toml)
+declare_id!("5zqdoDng2LnQ7JbiemiRwzTaPnnEU4eMXMfCCF3P4xQQ");
 
 #[program]
 pub mod onlypump_presale {

@@ -14,6 +14,7 @@ import {
   createMint,
   mintTo,
   getAccount,
+  createAssociatedTokenAccountInstruction,
 } from "@solana/spl-token";
 import { expect } from "chai";
 
@@ -34,8 +35,10 @@ describe("onlypump_presale", () => {
   let platformConfig: PublicKey;
   let presale: PublicKey;
   let tokenVault: PublicKey;
+  let tokenVaultAuthority: PublicKey;
   let publicSolVault: PublicKey;
   let ecosystemVault: PublicKey;
+  let ecosystemVaultAuthority: PublicKey;
 
   // Constants
   const TOKEN_DECIMALS = 6;
@@ -67,8 +70,8 @@ describe("onlypump_presale", () => {
     // Create token mint
     tokenMint = await createMint(
       provider.connection,
-      authority,
-      authority.publicKey,
+      authority, // payer
+      authority.publicKey, // mint authority
       null,
       TOKEN_DECIMALS
     );
@@ -84,40 +87,37 @@ describe("onlypump_presale", () => {
       program.programId
     );
 
-    // Note: tokenVault is a TokenAccount, not a PDA for the authority
-    // The authority is a separate PDA
-    const [tokenVaultAuthority] = PublicKey.findProgramAddressSync(
+    // tokenVault is a PDA token account (not an ATA)
+    // It's derived from seeds: [b"token_vault", presale.key().as_ref()]
+    // The authority is the same PDA
+    [tokenVault] = PublicKey.findProgramAddressSync(
       [Buffer.from("token_vault"), presale.toBuffer()],
       program.programId
     );
-    
-    // tokenVault will be created in create_presale instruction
-    // For now, we'll derive it (it's a token account with the mint)
-    tokenVault = await getAssociatedTokenAddress(tokenMint, tokenVaultAuthority);
+    tokenVaultAuthority = tokenVault; // Same PDA
 
     [publicSolVault] = PublicKey.findProgramAddressSync(
       [Buffer.from("public_sol_vault"), presale.toBuffer()],
       program.programId
     );
 
-    const [ecosystemVaultAuthority] = PublicKey.findProgramAddressSync(
+    // ecosystemVault is also a PDA token account
+    // The authority is the same PDA
+    [ecosystemVault] = PublicKey.findProgramAddressSync(
       [Buffer.from("ecosystem_vault"), presale.toBuffer()],
       program.programId
     );
-    
-    // ecosystemVault will be created in create_presale instruction
-    ecosystemVault = await getAssociatedTokenAddress(tokenMint, ecosystemVaultAuthority);
+    ecosystemVaultAuthority = ecosystemVault; // Same PDA
   });
 
   it("Initializes the platform", async () => {
     const feeBps = 100; // 1% fee
 
     const tx = await program.methods
-      .initializePlatform(operator.publicKey, treasury.publicKey, feeBps)
+      // Treat `authority` as the operator/admin who can fund the presale
+      .initializePlatform(authority.publicKey, treasury.publicKey, feeBps)
       .accounts({
-        platform: platformConfig,
         owner: owner.publicKey,
-        systemProgram: SystemProgram.programId,
       })
       .signers([owner])
       .rpc();
@@ -126,7 +126,8 @@ describe("onlypump_presale", () => {
 
     const platform = await program.account.platformConfig.fetch(platformConfig);
     expect(platform.owner.toString()).to.equal(owner.publicKey.toString());
-    expect(platform.operator.toString()).to.equal(operator.publicKey.toString());
+    // Operator was set to `authority.publicKey` when initializing the platform
+    expect(platform.operator.toString()).to.equal(authority.publicKey.toString());
     expect(platform.treasury.toString()).to.equal(treasury.publicKey.toString());
     expect(platform.feeBps).to.equal(feeBps);
   });
@@ -138,44 +139,48 @@ describe("onlypump_presale", () => {
     const publicPriceLamportsPerToken = new anchor.BN(1_000_000); // 0.001 SOL per token (with 6 decimals)
     const hardCapLamports = new anchor.BN(400 * LAMPORTS_PER_SOL); // 400 SOL hard cap
 
-    // Derive authorities
-    const [tokenVaultAuthority] = PublicKey.findProgramAddressSync(
-      [Buffer.from("token_vault"), presale.toBuffer()],
-      program.programId
-    );
-    
-    const [ecosystemVaultAuthority] = PublicKey.findProgramAddressSync(
-      [Buffer.from("ecosystem_vault"), presale.toBuffer()],
-      program.programId
-    );
+    // Authorities are the same as the vaults (same PDAs)
 
-    const tx = await program.methods
-      .createPresale(
-        tokenMint,
-        authority.publicKey,
-        publicStartTs,
-        publicEndTs,
-        publicPriceLamportsPerToken,
-        hardCapLamports
-      )
-      .accounts({
-        platform: platformConfig,
-        presale: presale,
-        tokenVault: tokenVault,
-        tokenVaultAuthority: tokenVaultAuthority,
-        ecosystemVault: ecosystemVault,
-        ecosystemVaultAuthority: ecosystemVaultAuthority,
-        publicSolVault: publicSolVault,
-        admin: owner.publicKey,
-        mint: tokenMint,
-        systemProgram: SystemProgram.programId,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-      })
-      .signers([owner])
-      .rpc();
+    let tx: string;
+    try {
+      tx = await program.methods
+        .createPresale(
+          tokenMint,
+          authority.publicKey,
+          publicStartTs,
+          publicEndTs,
+          publicPriceLamportsPerToken,
+          hardCapLamports
+        )
+        .accounts({
+          admin: owner.publicKey,
+          mint: tokenMint,
+        })
+        .signers([owner])
+        .rpc();
+      console.log("Create presale tx:", tx);
+    } catch (error: any) {
+      console.error("Error creating presale:", error);
+      if (error.logs) {
+        console.error("Program logs:", error.logs);
+      }
+      throw error;
+    }
 
-    console.log("Create presale tx:", tx);
+    // Wait a bit for the account to be fully written
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    // Try to fetch raw account data first to debug
+    try {
+      const accountInfo = await provider.connection.getAccountInfo(presale);
+      if (!accountInfo) {
+        throw new Error("Presale account does not exist");
+      }
+      console.log("Presale account data length:", accountInfo.data.length);
+      console.log("Presale account owner:", accountInfo.owner.toString());
+    } catch (error) {
+      console.error("Error fetching account info:", error);
+    }
 
     const presaleAccount = await program.account.presale.fetch(presale);
     expect(presaleAccount.mint.toString()).to.equal(tokenMint.toString());
@@ -193,11 +198,29 @@ describe("onlypump_presale", () => {
   });
 
   it("Funds presale tokens", async () => {
-    // Create authority's token account and mint tokens
+    // Create authority's token account first
     const authorityTokenAccount = await getAssociatedTokenAddress(
       tokenMint,
       authority.publicKey
     );
+
+    // Create the token account if it doesn't exist
+    try {
+      await getAccount(provider.connection, authorityTokenAccount);
+    } catch {
+      // Account doesn't exist, create it
+      const createATA = await provider.sendAndConfirm(
+        new anchor.web3.Transaction().add(
+          createAssociatedTokenAccountInstruction(
+            authority.publicKey,
+            authorityTokenAccount,
+            authority.publicKey,
+            tokenMint
+          )
+        ),
+        [authority]
+      );
+    }
 
     // Mint 800M tokens to authority
     const mintAmount = BigInt(TOTAL_PRESALE_TOKENS * 10 ** TOKEN_DECIMALS);
@@ -214,12 +237,9 @@ describe("onlypump_presale", () => {
     const tx = await program.methods
       .fundPresaleTokens(new anchor.BN(mintAmount.toString()))
       .accounts({
-        platform: platformConfig,
-        presale: presale,
-        tokenVault: tokenVault,
+        presale: presale, // Provide presale so Anchor can derive token_vault
         fromTokenAccount: authorityTokenAccount,
         authority: authority.publicKey,
-        tokenProgram: TOKEN_PROGRAM_ID,
       })
       .signers([authority])
       .rpc();
@@ -243,12 +263,9 @@ describe("onlypump_presale", () => {
     const tx = await program.methods
       .whitelistUser(tier, maxContribution)
       .accounts({
-        platform: platformConfig,
-        presale: presale,
-        whitelist: whitelist,
+        presale: presale, // Provide presale so Anchor can derive whitelist
         admin: owner.publicKey,
         user: user.publicKey,
-        systemProgram: SystemProgram.programId,
       })
       .signers([owner])
       .rpc();
@@ -282,12 +299,10 @@ describe("onlypump_presale", () => {
     const tx = await program.methods
       .contributePublic(contributionAmount)
       .accounts({
-        presale: presale,
-        publicSolVault: publicSolVault,
-        userPosition: userPosition,
+        presale: presale, // Provide presale so Anchor can derive publicSolVault and userPosition
         user: user.publicKey,
+        // Provide whitelist so the optional account is available to the program
         whitelist: whitelist,
-        systemProgram: SystemProgram.programId,
       })
       .signers([user])
       .rpc();
@@ -314,8 +329,7 @@ describe("onlypump_presale", () => {
     const tx = await program.methods
       .finalizePresale()
       .accounts({
-        platform: platformConfig,
-        presale: presale,
+        presale: presale, // Provide presale explicitly
         admin: owner.publicKey,
       })
       .signers([owner])
@@ -328,13 +342,27 @@ describe("onlypump_presale", () => {
   });
 
   it("Migrates presale and creates LP (stub)", async () => {
-    const [lpAuthority] = PublicKey.findProgramAddressSync(
-      [Buffer.from("lp_authority"), presale.toBuffer()],
-      program.programId
-    );
-
-    // Create temporary LP accounts
-    const lpTokenAccount = await getAssociatedTokenAddress(tokenMint, lpAuthority);
+    // LP token account should be a regular token account (not PDA)
+    // Use treasury's ATA for simplicity
+    const lpTokenAccount = await getAssociatedTokenAddress(tokenMint, treasury.publicKey);
+    
+    // Create the ATA if it doesn't exist
+    try {
+      await getAccount(provider.connection, lpTokenAccount);
+    } catch {
+      const createATA = await provider.sendAndConfirm(
+        new anchor.web3.Transaction().add(
+          createAssociatedTokenAccountInstruction(
+            treasury.publicKey,
+            lpTokenAccount,
+            treasury.publicKey,
+            tokenMint
+          )
+        ),
+        [treasury]
+      );
+    }
+    
     const lpSolAccount = Keypair.generate();
 
     // Airdrop to LP SOL account
@@ -346,26 +374,14 @@ describe("onlypump_presale", () => {
 
     const lpSolAmount = new anchor.BN(0.5 * LAMPORTS_PER_SOL); // 0.5 SOL for LP
 
-    const [tokenVaultAuthority] = PublicKey.findProgramAddressSync(
-      [Buffer.from("token_vault"), presale.toBuffer()],
-      program.programId
-    );
-
     const tx = await program.methods
       .migrateAndCreateLp(lpSolAmount)
       .accounts({
-        platform: platformConfig,
-        presale: presale,
-        tokenVault: tokenVault,
-        tokenVaultAuthority: tokenVaultAuthority,
-        publicSolVault: publicSolVault,
-        ecosystemVault: ecosystemVault,
+        presale: presale, // Provide presale so Anchor can derive token_vault, ecosystem_vault, etc.
         lpTokenAccount: lpTokenAccount,
         lpSolAccount: lpSolAccount.publicKey,
         treasury: treasury.publicKey,
         admin: owner.publicKey,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
       })
       .signers([owner])
       .rpc();
@@ -388,26 +404,37 @@ describe("onlypump_presale", () => {
       program.programId
     );
 
-    const userTokenAccount = await getAssociatedTokenAddress(tokenMint, user.publicKey);
+    const userTokenAccount = await getAssociatedTokenAddress(
+      tokenMint,
+      user.publicKey
+    );
+
+    // Ensure the user's token account exists (create ATA if needed)
+    try {
+      await getAccount(provider.connection, userTokenAccount);
+    } catch {
+      const createATA = await provider.sendAndConfirm(
+        new anchor.web3.Transaction().add(
+          createAssociatedTokenAccountInstruction(
+            user.publicKey, // payer
+            userTokenAccount,
+            user.publicKey, // owner
+            tokenMint
+          )
+        ),
+        [user]
+      );
+    }
 
     const positionBefore = await program.account.userPosition.fetch(userPosition);
     const tokensToClaim = positionBefore.tokensAllocated.sub(positionBefore.tokensClaimed);
 
-    const [tokenVaultAuthority] = PublicKey.findProgramAddressSync(
-      [Buffer.from("token_vault"), presale.toBuffer()],
-      program.programId
-    );
-
     const tx = await program.methods
       .claimTokens()
       .accounts({
-        presale: presale,
-        tokenVault: tokenVault,
-        tokenVaultAuthority: tokenVaultAuthority,
-        userPosition: userPosition,
+        presale: presale, // Provide presale so Anchor can derive token_vault and user_position
         user: user.publicKey,
         userTokenAccount: userTokenAccount,
-        tokenProgram: TOKEN_PROGRAM_ID,
       })
       .signers([user])
       .rpc();

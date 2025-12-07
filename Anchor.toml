@@ -6,7 +6,10 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-onlypump_presale = "BnFLfMvisKoXikZxvBUDvqfMT7iqVYEq4b65H6ThSfGN"
+onlypump_presale = "5zqdoDng2LnQ7JbiemiRwzTaPnnEU4eMXMfCCF3P4xQQ"
+
+[programs.devnet]
+onlypump_presale = "5zqdoDng2LnQ7JbiemiRwzTaPnnEU4eMXMfCCF3P4xQQ"
 
 [registry]
 url = "https://api.apr.dev"

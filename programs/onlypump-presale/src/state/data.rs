@@ -36,7 +36,15 @@ pub struct Presale {
 }
 
 impl Presale {
-    pub const LEN: usize = 32 + 32 + 32 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 1 + 1 + 32 + 32 + 1;
+    // 3 * Pubkey (platform, authority, mint)
+    // 2 * i64 (public_start_ts, public_end_ts)
+    // 6 * u64 (caps, price, hard cap, raised)
+    // 2 * bool (is_finalized, is_migrated)
+    // 2 * Pubkey (ecosystem_vault, lp_authority)
+    // 1 * u8 (bump)
+    // Total: 3*32 + 2*8 + 6*8 + 2*1 + 2*32 + 1 = 227 bytes
+    pub const LEN: usize =
+        32 + 32 + 32 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 1 + 1 + 32 + 32 + 1;
 }
 
 #[account]
