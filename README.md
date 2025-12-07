@@ -284,9 +284,36 @@ This usually means the validator isn't ready yet. The test script includes a wai
 6. **Test on devnet** with real transactions
 7. **Deploy to mainnet** after thorough testing
 
+## Next Steps: Backend API Integration
+
+Once the on-chain presale logic is stable and deployed, the next phase is exposing it through your backend (e.g. NestJS) so the frontend can drive the full flow.
+
+- **Wrap write instructions as API endpoints** (using `ONLYPUMP_PRESALE_PROGRAM_ID` and `ONLYPUMP_PRESALE_IDL` from `src/common/constants.ts` in the root project):
+  - **Platform setup**:
+    - `POST /presale/platform/initialize` → calls `initialize_platform`.
+  - **Presale lifecycle**:
+    - `POST /presale` → calls `create_presale` for a given SPL mint (eventually a Pump.fun token mint).
+    - `POST /presale/:presaleMint/fund` → calls `fund_presale_tokens`.
+    - `POST /presale/:presaleMint/whitelist` → calls `whitelist_user`.
+    - `POST /presale/:presaleMint/contribute` → calls `contribute_public`.
+    - `POST /presale/:presaleMint/finalize` → calls `finalize_presale`.
+    - `POST /presale/:presaleMint/migrate` → calls `migrate_and_create_lp`.
+    - `POST /presale/:presaleMint/claim` → calls `claim_tokens`.
+
+- **Expose read-only views as APIs**:
+  - `GET /presale/platform` → fetches `PlatformConfig`.
+  - `GET /presale/:presaleMint` → fetches `Presale` state.
+  - `GET /presale/:presaleMint/position/:user` → fetches `UserPosition`.
+  - `GET /presale/:presaleMint/whitelist/:user` → fetches `WhitelistEntry` (if any).
+
+- **Upcoming: Pump.fun token integration (high level plan)**:
+  - Backend creates or fetches a **Pump.fun token** via existing APIs and obtains its SPL mint address.
+  - That mint address is passed into the `create_presale` endpoint as the `mint` argument.
+  - Backend ensures the funding authority wallet holds enough of that mint (via Pump.fun flows) before calling `fund_presale_tokens`.
+  - Later, `migrate_and_create_lp` can be extended or complemented with a PumpSwap/Raydium CPI or off-chain worker to actually create the LP using the prepared `lp_token_account` and `lp_sol_account`.
+
 ## Resources
 
 - [Anchor Documentation](https://www.anchor-lang.com/)
 - [Solana Cookbook](https://solanacookbook.com/)
 - [Solana Web3.js Docs](https://solana-labs.github.io/solana-web3.js/)
-
